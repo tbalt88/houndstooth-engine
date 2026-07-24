@@ -1,5 +1,12 @@
 # Houndstooth
 
+![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
+![Python](https://img.shields.io/badge/Python-3.12-blue)
+![Claude API](https://img.shields.io/badge/Claude-API-orange)
+![Production](https://img.shields.io/badge/production-proven--since--2026--07-brightgreen)
+
+*This system is part of the working record behind my [AIDLC series](https://www.linkedin.com/in/dexterdomingo/) on AI-driven development.*
+
 A personal job-application pipeline. It scrapes job postings, scores them for fit
 using an LLM, drafts a tailored resume and cover letter for the strong matches,
 verifies the generated documents before trusting them, and delivers everything
@@ -20,6 +27,8 @@ and the `profile/*.example.*` files show the shape of the real inputs with
 fictional data, and `sample_output/digest_example.md` shows the shape of a
 real output the same way. Nothing in this repo is a real job, a real score,
 or a real resume.
+
+<p align="right">(<a href="#houndstooth">back to top</a>)</p>
 
 ## Architecture
 
@@ -74,6 +83,8 @@ and an HTML digest with the ranked jobs and live document links gets emailed.
 as separate steps in `.github/workflows/daily.yml` so a bad step doesn't have
 to invalidate the ones before it.
 
+<p align="right">(<a href="#houndstooth">back to top</a>)</p>
+
 ## The anti-fabrication guardrail
 
 The risk in an LLM writing your resume isn't tone, it's invented experience.
@@ -104,6 +115,8 @@ and reorders, freely, in its own words. It cannot add a skill, a metric, or a
 line of experience that doesn't already exist in that file, because there's
 no code path that would render text it wrote outside the bank.
 
+<p align="right">(<a href="#houndstooth">back to top</a>)</p>
+
 ## Cost design
 
 Two different jobs get two different models. Fit-scoring runs against every
@@ -116,6 +129,8 @@ On top of the model split, `scoring.max_jobs_per_run` in the config is a hard
 cap: even if the backlog is larger, only that many jobs get an LLM call in a
 single run. It's a blunt instrument, not a budget forecast, and that's the
 point, it bounds the worst case regardless of how much the scrape stage found.
+
+<p align="right">(<a href="#houndstooth">back to top</a>)</p>
 
 ## Reliability lessons
 
@@ -146,6 +161,8 @@ authenticates as the account owner via an OAuth refresh token
 from then on) instead of a service-account key. Uploads land in a folder the
 account already owns, no sharing step required.
 
+<p align="right">(<a href="#houndstooth">back to top</a>)</p>
+
 ## Testing and verification
 
 There's no mocked test suite here, this is a small personal automation, not a
@@ -170,6 +187,8 @@ library. What "tested" means in practice:
   human reading the digest every morning; it would not be a fair tradeoff for
   anything with more than one user depending on it.
 
+<p align="right">(<a href="#houndstooth">back to top</a>)</p>
+
 ## Setup, if you want to run your own fork
 
 ```bash
@@ -193,6 +212,8 @@ enable the Drive API, create a Desktop-app OAuth client, then run
 browser for a one-time consent screen and prints the three values
 (`GDRIVE_CLIENT_ID`, `GDRIVE_CLIENT_SECRET`, `GDRIVE_REFRESH_TOKEN`) to set as
 env vars or GitHub Actions secrets.
+
+<p align="right">(<a href="#houndstooth">back to top</a>)</p>
 
 ## For hiring managers
 
