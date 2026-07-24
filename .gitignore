@@ -1,0 +1,22 @@
+# environment
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# secrets -- never commit credentials
+*service*account*.json
+client_secret*.json
+.env
+
+# personal state -- this is what makes a live fork yours, not the showcase's.
+# (the private production repo this was extracted from commits jobs.db/reports/
+# intentionally, since its scheduled CI run needs that state to persist between
+# ephemeral runners -- see README "Reliability lessons". That's a deliberate
+# choice for a private repo; a public fork should keep this data out of git.)
+jobs.db
+reports/
+tailored_output/
+profile/resume_profile.md
+profile/resume_template.json
+config.yaml

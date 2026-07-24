@@ -1,0 +1,91 @@
+# ============================================================
+# Houndstooth config — EXAMPLE
+#
+# Copy this to config.yaml and fill in your own search terms, ATS targets,
+# and delivery settings. Nothing in this file is real: the search terms,
+# target companies, and ids below are placeholders showing the shape of
+# the config, not a working job-search strategy.
+# ============================================================
+
+# ---- Where to search ----
+locations:
+  - "Austin, TX"
+  - "Remote"
+
+country_indeed: "USA"
+hours_old: 24           # how far back each run searches (24 = daily cadence)
+results_per_search: 40  # per site per search term
+sites: ["indeed", "google", "zip_recruiter"]   # tier-1 sources with no anti-bot friction
+linkedin_enabled: false  # flip to true + add proxies for tier-3 residual pulls; LinkedIn is aggressive about blocking scrapers
+linkedin_results: 15     # keep small to stay under detection thresholds
+proxies: []              # e.g. ["user:pass@host:port"] -- only needed if linkedin_enabled
+
+# ---- Keyword searches ----
+# Each term runs against every site + location combination. Tier is just a
+# label carried through to scoring/reporting -- use it however is useful
+# (e.g. "core title match" vs. "adjacent/stretch").
+searches:
+  - term: "solutions engineer healthcare"
+    tier: 1
+  - term: "platform engineer fintech"
+    tier: 1
+  - term: "forward deployed engineer"
+    tier: 1
+  - term: "implementation architect"
+    tier: 2
+  - term: "AI solutions engineer"
+    tier: 2
+
+# Google Jobs needs natural-language query syntax, not bare keywords
+google_search_suffix: "jobs near Austin, TX since last week"
+
+# ---- Direct ATS targets ----
+# Bypasses job boards entirely and hits each company's own ATS API --
+# freshest data, no scraping/anti-bot concerns. type: greenhouse | lever |
+# ashby | workday. For workday, slug = tenant subdomain, extra = the site
+# name that appears in the company's careers URL (varies per tenant).
+ats_targets:
+  - { name: "ExampleCorp",       type: greenhouse, slug: "examplecorp" }
+  - { name: "SampleHealth",      type: lever,      slug: "samplehealth" }
+  - { name: "DemoTech",          type: ashby,      slug: "demotech" }
+  - { name: "AcmeSystems",       type: workday,    slug: "acmesystems", extra: "Acme" }
+
+# Keywords to match against ATS job titles (ATS endpoints return every open
+# role, so this is the only filter on that source -- boards already filter
+# by search term).
+ats_title_keywords:
+  - architect
+  - "forward deployed"
+  - "solutions engineer"
+  - integration
+
+# ---- Hard filters (stage 0, before any LLM spend) ----
+filters:
+  exclude_title_keywords: ["intern", "junior", "jr.", "entry level",
+                           "director", "vice president", "vp of", "head of"]
+  min_salary: 0            # set e.g. 150000 to enforce a floor when salary is present
+  require_us: true
+
+# ---- LLM scoring (stage 2 -- the expensive step, cost-guarded) ----
+scoring:
+  provider: anthropic          # anthropic | openai
+  model: claude-haiku-4-5-20251001   # cheap model: this runs against every prefiltered job
+  max_jobs_per_run: 150        # hard cap on LLM-scored jobs per run, regardless of backlog
+  min_keyword_prefilter: 1     # job must hit >=1 profile keyword before it's worth an LLM call
+
+# ---- Tailoring (stage 3 -- resume/cover-letter generation, see README) ----
+tailoring:
+  model: claude-sonnet-5        # final-output-quality work, not bulk triage -- use the strong model here
+  min_score: 75                 # only tailor jobs scoring >= this
+  max_retries: 2                # revision attempts if verification fails, before flagging for manual review
+  format: docx                  # docx (editable, default) | pdf (reportlab, no external binary needed)
+
+# ---- Delivery: Google Drive upload + email digest ----
+# Secrets come from env vars, NOT this file:
+#   GDRIVE_CLIENT_ID / GDRIVE_CLIENT_SECRET / GDRIVE_REFRESH_TOKEN  (run gdrive_authorize.py once)
+#   GMAIL_APP_PASSWORD           (Google app password for SMTP)
+delivery:
+  gdrive_folder_id: "REPLACE_WITH_YOUR_DRIVE_FOLDER_ID"   # any folder you own -- no sharing step needed (OAuth, not a service account)
+  email_from: "you@example.com"
+  email_to: "you@example.com"
+  min_score: 70                 # digest includes jobs scoring >= this

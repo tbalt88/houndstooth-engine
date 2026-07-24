@@ -1,0 +1,78 @@
+# Houndstooth daily run: scrape -> score -> tailor -> deliver -> persist state.
+#
+# Required repo secrets:
+#   ANTHROPIC_API_KEY     Claude API key (scoring + drafting)
+#   GMAIL_APP_PASSWORD    Google app password for SMTP digest email
+#   GDRIVE_CLIENT_ID      OAuth client id (run gdrive_authorize.py once to obtain)
+#   GDRIVE_CLIENT_SECRET  OAuth client secret (same one-time run)
+#   GDRIVE_REFRESH_TOKEN  OAuth refresh token (same one-time run)
+#   GDRIVE_FOLDER_ID      Drive folder id (any folder you own -- no sharing step needed)
+name: daily-pipeline
+
+on:
+  # PRIMARY trigger: an external scheduler (cron-job.org) POSTs to the
+  # workflow_dispatch REST API daily at 11:38 UTC (4:38 AM PDT). GitHub's own
+  # cron proved unreliable for this repo -- observed a 149-min delay and two
+  # outright dropped runs (Jul 9-10 2026) -- so we don't depend on it.
+  workflow_dispatch: {}   # invoked by the external scheduler + manual "Run workflow"
+  # BACKSTOP only: GitHub's best-effort cron. Random odd minute (:38) to dodge
+  # the congested :00/:15/:30/:45 slots. Remove this block once the external
+  # trigger is confirmed working, to avoid duplicate daily runs / digest emails.
+  # DST-naive (fixed UTC): 11:38 UTC = 4:38 AM PDT now, 3:38 AM in winter (PST).
+  schedule:
+    - cron: "38 11 * * *"
+
+# never let two runs race on committing jobs.db
+concurrency:
+  group: daily-pipeline
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Phase 1 — scrape + score + report
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python run_all.py
+
+      - name: Phase 2 — tailor top fits
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python phase2_tailor.py
+
+      - name: Deliver — Drive upload + email digest
+        env:
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
+          GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
+          GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+        run: python -m jobhunt.deliver
+
+      - name: Persist state (jobs.db + reports)
+        run: |
+          git config user.name "houndstooth-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add jobs.db reports/
+          if git diff --cached --quiet; then
+            echo "no state changes to commit"
+          else
+            git commit -m "daily run: $(date -u +%F)"
+            git pull --rebase origin ${GITHUB_REF_NAME}
+            git push origin ${GITHUB_REF_NAME}
+          fi

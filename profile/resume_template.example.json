@@ -1,0 +1,65 @@
+{
+  "_comment": "EXAMPLE FILE -- fictional candidate 'Jordan Doe'. This shows the shape of resume_template.json: a bank of tagged, id'd bullets that the tailoring drafter (jobhunt/tailor/drafter.py) may SELECT FROM but never invent beyond. That constraint -- select an existing id, never write new bullet text -- is the anti-fabrication guardrail, and it's enforced in code (see _validate_no_fabrication in drafter.py), not just requested in the prompt. Copy this to resume_template.json and replace every field with your own real, factual experience.",
+  "contact": {
+    "name": "Jordan Doe",
+    "location": "Austin, TX (Remote/Hybrid)",
+    "email": "jordan.doe@example.com",
+    "phone": "555-010-0100",
+    "linkedin": "https://linkedin.com/in/jordandoe-example"
+  },
+  "summary_variants": [
+    "Platform engineer with 8+ years building integration and automation systems for regulated fintech products, now applying that same delivery discipline to AI-assisted engineering workflows.",
+    "Solutions-focused backend engineer specializing in payments infrastructure, API design, and compliance-aware system architecture."
+  ],
+  "experience": [
+    {
+      "company": "Example Fintech Co",
+      "title": "Senior Platform Engineer",
+      "start": "2021-03",
+      "end": "Present",
+      "bullets": [
+        {
+          "id": "b1",
+          "text": "Designed and operated a payments-reconciliation service processing 2M+ transactions/day, cutting manual reconciliation effort by 60%.",
+          "tags": ["fintech", "backend", "automation", "payments"]
+        },
+        {
+          "id": "b2",
+          "text": "Led the migration of a monolithic billing system to event-driven microservices, reducing incident recovery time from hours to minutes.",
+          "tags": ["architecture", "microservices", "reliability"]
+        }
+      ]
+    },
+    {
+      "company": "Sample Systems Inc",
+      "title": "Software Engineer",
+      "start": "2017-06",
+      "end": "2021-02",
+      "bullets": [
+        {
+          "id": "b3",
+          "text": "Built REST APIs and internal tooling for a compliance-reporting platform used by 40+ internal analysts.",
+          "tags": ["backend", "api-design", "compliance"]
+        },
+        {
+          "id": "b4",
+          "text": "Introduced automated integration testing for the core transaction pipeline, reducing production defects by 35%.",
+          "tags": ["testing", "quality", "ci-cd"]
+        }
+      ]
+    }
+  ],
+  "projects": [],
+  "skills": [
+    "Python, Go",
+    "Event-driven architecture, microservices",
+    "REST API design",
+    "PostgreSQL, Kafka",
+    "CI/CD (GitHub Actions)",
+    "Compliance-aware system design (SOC 2, PCI-adjacent)"
+  ],
+  "education": [
+    { "degree": "BS Computer Science", "school": "Example State University", "year": "2017" }
+  ],
+  "certifications": []
+}
