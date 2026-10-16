@@ -6,10 +6,14 @@ from pathlib import Path
 
 import yaml
 
-from . import db
+from . import db, llm
 
 ROOT = Path(__file__).resolve().parent.parent
-PROFILE = (ROOT / "profile" / "resume_profile.md").read_text()
+
+
+def _load_profile():
+    return (ROOT / "profile" / "resume_profile.md").read_text(encoding="utf-8")
+
 
 # Cheap prefilter: a job description must touch the candidate's world at least once
 PROFILE_KEYWORDS = [
@@ -47,8 +51,7 @@ Description:
 
 
 def _call_anthropic(model, prompt):
-    import anthropic
-    client = anthropic.Anthropic()  # ANTHROPIC_API_KEY env var
+    client = llm.client()  # one client per process; see jobhunt/llm.py
     msg = client.messages.create(model=model, max_tokens=1200,
                                  messages=[{"role": "user", "content": prompt}])
     return msg.content[0].text
@@ -95,17 +98,19 @@ def _parse(text):
     return json.loads(_extract_json_object(text))
 
 
-def run(config_path="config.yaml"):
+def run(config_path="config.yaml", max_jobs=None):
     cfg = yaml.safe_load(open(config_path))
     sc = cfg["scoring"]
     filt = cfg.get("filters", {})
     excl = [k.lower() for k in filt.get("exclude_title_keywords", [])]
     call = _call_anthropic if sc["provider"] == "anthropic" else _call_openai
+    profile = _load_profile()
 
+    limit = max_jobs if max_jobs is not None else sc.get("max_jobs_per_run", 150)
     con = db.connect()
     rows = con.execute(
         "SELECT * FROM jobs WHERE score IS NULL ORDER BY tier, date_posted DESC LIMIT ?",
-        (sc.get("max_jobs_per_run", 150),),
+        (limit,),
     ).fetchall()
     print(f"[score] {len(rows)} unscored jobs queued")
 
@@ -133,7 +138,7 @@ def run(config_path="config.yaml"):
             continue
 
         # Stage 2: LLM scoring
-        prompt = RUBRIC.format(profile=PROFILE, title=r["title"], company=r["company"],
+        prompt = RUBRIC.format(profile=profile, title=r["title"], company=r["company"],
                                location=r["location"], description=desc[:9000] or "(no description — score on title only, cap at 60)")
         try:
             out = _parse(call(sc["model"], prompt))
@@ -152,6 +157,12 @@ def run(config_path="config.yaml"):
         con.commit()
 
     print(f"[score] done — {scored} scored, {skipped} filtered")
+    attempted = len(rows) - skipped
+    if attempted and scored == 0:
+        # Every LLM call failed (bad credential, outage, parse regression). Abort the run
+        # so report/deliver never ship a digest built on nothing -- the 2026-10-07/08 runs
+        # went green with zero scored jobs after a 401 on every call.
+        raise SystemExit(f"[score] FATAL: {attempted} jobs reached the LLM and 0 scored")
 
 
 if __name__ == "__main__":

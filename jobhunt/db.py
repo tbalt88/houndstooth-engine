@@ -6,6 +6,11 @@ from pathlib import Path
 
 DB_PATH = Path(__file__).resolve().parent.parent / "jobs.db"
 
+DIGEST_LOG_SCHEMA = (
+    "CREATE TABLE IF NOT EXISTS digest_log ("
+    "job_id TEXT, digest_date TEXT, PRIMARY KEY (job_id, digest_date))"
+)
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
     id TEXT PRIMARY KEY,            -- dedupe hash
@@ -35,6 +40,18 @@ CREATE TABLE IF NOT EXISTS jobs (
     status TEXT DEFAULT 'new'       -- new/reviewed/applied/rejected/interview
 );
 """
+
+# Tracker Status values that remove a job from pipeline outputs (digest email,
+# tailoring, baseline-change re-scoring). Owner decision 2026-08-07. The tracker
+# spreadsheet itself always keeps every row -- suppression is a filter, not a delete.
+SUPPRESSED_STATUSES = ("Dismissed", "Rejected")
+
+
+def not_suppressed_sql(column="user_status"):
+    """SQL fragment excluding suppressed rows; bind db.SUPPRESSED_STATUSES after it."""
+    placeholders = ",".join("?" * len(SUPPRESSED_STATUSES))
+    return f"({column} IS NULL OR {column} NOT IN ({placeholders}))"
+
 
 # Prefer origin ATS data over aggregator copies when the same job arrives twice
 SOURCE_RANK = {
@@ -67,6 +84,8 @@ TAILOR_COLUMNS = {
     "verification_status": "TEXT",
     "delivered_at": "TEXT",
     "drive_links": "TEXT",
+    "user_status": "TEXT",
+    "user_notes": "TEXT",
 }
 
 
@@ -83,9 +102,18 @@ def migrate_tailor_columns(con):
 def connect():
     con = sqlite3.connect(DB_PATH)
     con.execute(SCHEMA)
+    con.execute(DIGEST_LOG_SCHEMA)
     con.row_factory = sqlite3.Row
     migrate_tailor_columns(con)
     return con
+
+
+def _tombstoned(con, jid: str) -> bool:
+    """True if retention deleted this id recently (see jobhunt/retention.py)."""
+    try:
+        return con.execute("SELECT 1 FROM pruned_jobs WHERE id=?", (jid,)).fetchone() is not None
+    except sqlite3.OperationalError:  # table not created yet: retention never ran
+        return False
 
 
 def upsert(con, job: dict) -> bool:
@@ -93,6 +121,8 @@ def upsert(con, job: dict) -> bool:
     jid = job_hash(job.get("title", ""), job.get("company", ""), job.get("location", ""))
     rank = SOURCE_RANK.get(job.get("source", ""), 9)
     row = con.execute("SELECT source_rank FROM jobs WHERE id=?", (jid,)).fetchone()
+    if row is None and _tombstoned(con, jid):
+        return False  # pruned by retention within the tombstone window: already seen, skip
     if row is None:
         con.execute(
             """INSERT INTO jobs (id, source, source_rank, search_term, tier, title, company,

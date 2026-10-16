@@ -20,3 +20,5 @@ tailored_output/
 profile/resume_profile.md
 profile/resume_template.json
 config.yaml
+profile/projects.json
+profile/voice_bank.json

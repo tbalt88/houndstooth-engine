@@ -13,8 +13,12 @@ OUT = ROOT / "reports"
 def run(min_score=70):
     OUT.mkdir(exist_ok=True)
     con = db.connect()
+    # Same row set as the digest email: tracker-suppressed statuses are excluded so the
+    # committed CSV keeps mirroring what was actually mailed.
     rows = con.execute(
-        "SELECT * FROM jobs WHERE score >= ? ORDER BY score DESC, date_posted DESC", (min_score,)
+        f"SELECT * FROM jobs WHERE score >= ? AND {db.not_suppressed_sql()} "
+        "ORDER BY score DESC, date_posted DESC",
+        (min_score, *db.SUPPRESSED_STATUSES),
     ).fetchall()
 
     stamp = date.today().isoformat()
