@@ -45,6 +45,8 @@ flowchart TD
     G -- fail --> E
     G -- pass --> H[Deliver: upload to Drive, email digest]
     D --> H
+    H --> I[Tracker: merge into the Drive workbook]
+    I --> J[Retention: prune jobs.db + reports to the window]
 ```
 
 **Scrape** (`jobhunt/scrape_ats.py`, `jobhunt/scrape_boards.py`). Two sources
@@ -64,7 +66,13 @@ and resume-targeting tips, all as a single JSON object.
 
 **Tailor** (`phase2_tailor.py`, `jobhunt/tailor/`). For jobs scoring at or
 above a threshold, a second LLM call drafts a tailored resume and cover
-letter. This is the stage with the guardrail, covered below.
+letter. The candidate facts come from three hand-maintained files merged by
+`jobhunt/profile_load.py`: the bullet bank (`resume_template.json`), a
+project bank (`projects.json`) and a voice bank (`voice_bank.json`) of
+pre-written summaries, anecdotes, openers and closers. `jobhunt/tailor/style.py`
+picks the document's shape per posting (audience, section order, titles,
+bullet marker), seeded by job id so a re-render is reproducible. This is the
+stage with the guardrail, covered below.
 
 **Render + verify** (`jobhunt/tailor/renderers/`, `jobhunt/tailor/verify.py`).
 The drafted content becomes an actual `.docx` (or `.pdf`, pluggable). The
@@ -77,10 +85,25 @@ instead of silently shipped.
 
 **Deliver** (`jobhunt/deliver.py`). Verified documents upload to Google Drive,
 and an HTML digest with the ranked jobs and live document links gets emailed.
+A `digest_log` table remembers which jobs have already been sent, so each
+digest leads with what is new since the last one.
 
-`run_all.py` chains scrape and score. `phase2_tailor.py` and
-`python -m jobhunt.deliver` run the last two stages. All four are also wired
-as separate steps in `.github/workflows/daily.yml` so a bad step doesn't have
+**Track** (`jobhunt/tracker.py`). Every digested job is merged into a single
+`Houndstooth Job Tracker.xlsx` in the same Drive folder. The merge is
+two-way: the Status and Notes columns you edit in the workbook are read back
+into `jobs.db` each run, and a job you mark Dismissed or Rejected drops out
+of future digests.
+
+**Retain** (`jobhunt/retention.py`). `jobs.db` is committed to git daily in
+the private repo, so it has to stay bounded. Rows older than the configured
+window are deleted unless acted on (tailored, delivered, or given a tracker
+status), deleted ids are tombstoned so a still-live posting is not re-scored
+as new, old `reports/` files go with them, and the database is VACUUMed.
+
+`run_all.py` chains scrape and score. `phase2_tailor.py`,
+`python -m jobhunt.deliver`, `python -m jobhunt.tracker` and
+`python -m jobhunt.retention` run the rest. All of them are wired as
+separate steps in `.github/workflows/daily.yml` so a bad step doesn't have
 to invalidate the ones before it.
 
 <p align="right">(<a href="#houndstooth">back to top</a>)</p>
@@ -102,18 +125,26 @@ and raises if the model invented one:
 
 ```python
 def _validate_no_fabrication(draft: dict, facts: dict) -> None:
-    valid_ids = {b["id"] for exp in facts.get("experience", []) for b in exp.get("bullets", [])}
-    valid_ids |= {b["id"] for proj in facts.get("projects", []) for b in proj.get("bullets", [])}
-    selected = draft.get("resume", {}).get("selected_bullets", [])
-    unknown = [bid for bid in selected if bid not in valid_ids]
+    unknown = [bid for bid in draft.get("resume", {}).get("selected_bullets", [])
+               if bid not in _valid_bullet_ids(facts)]
     if unknown:
-        raise ValueError(f"drafter fabricated bullet ids not in resume_template.json: {unknown}")
+        raise ValueError(f"drafter fabricated bullet ids not in the bank: {unknown}")
 ```
 
-That's the whole mechanism: allowlist, not instruction. The model summarizes
-and reorders, freely, in its own words. It cannot add a skill, a metric, or a
-line of experience that doesn't already exist in that file, because there's
-no code path that would render text it wrote outside the bank.
+That's the whole mechanism: allowlist, not instruction. It cannot add a
+skill, a metric, or a line of experience that doesn't already exist in that
+file, because there's no code path that would render text it wrote outside
+the bank.
+
+The same idea now covers the prose. With a `voice_bank.json` present, the
+summary, headline, cover-letter opener, two anecdotes and closer are also
+selected by id from human-written text; the model's only free text is up to
+two short "bridge" sentences, which must name the company, stay under 30
+words and avoid a banned-phrase list, all checked in `_validate_voice()`.
+Per-role bullet floors and project counts are filled and clamped in
+`_enforce_floors()` rather than requested. Without a voice bank the drafter
+falls back to the legacy schema, where it writes a short summary and three
+paragraphs from the facts.
 
 <p align="right">(<a href="#houndstooth">back to top</a>)</p>
 
@@ -143,10 +174,18 @@ is best-effort with no delivery guarantee, and in practice that meant a
 round-minute slots like `:00`. The fix was to stop depending on it: an
 external scheduler ([cron-job.org](https://cron-job.org)) fires an HTTP POST
 against the `workflow_dispatch` REST API at a fixed time, and GitHub's queue
-handles it the same second. The `schedule:` block in `daily.yml` is left in
-only as an odd-minute best-effort backstop, not the primary trigger, and the
-workflow's `concurrency` group keeps a double-fire from racing on the
+handles it the same second. The `schedule:` block was kept as an odd-minute
+backstop for a month, then removed once the external trigger had proven
+reliable, because both were firing and producing double digests. The
+workflow's `concurrency` group keeps any double-fire from racing on the
 committed state.
+
+**One LLM client per process under OIDC federation.** With Workload Identity
+Federation each GitHub OIDC token may be exchanged exactly once, and the SDK
+performs that exchange when a client is constructed. Building a client per
+call, which `score.py` and `drafter.py` originally did, re-presented the
+same single-use token and was rejected as a replay. `jobhunt/llm.py` now
+holds the single cached client; everything goes through it.
 
 **Store paths relative to the repo root, not absolute.** Local development
 and the CI runner don't share a filesystem layout. Any path written to the
@@ -165,27 +204,36 @@ account already owns, no sharing step required.
 
 ## Testing and verification
 
-There's no mocked test suite here, this is a small personal automation, not a
-library. What "tested" means in practice:
+```bash
+pip install pytest
+python -m pytest -q tests
+```
 
-- `jobhunt/tailor/verify.py` is the automated check that runs on every real
-  execution: it extracts text back out of every rendered document and fails
-  the job (triggering a retry) if the text is too short, contains mojibake,
-  or is missing a keyword the drafter said it would mirror.
-- `_validate_no_fabrication()` in `drafter.py` runs on every drafting call and
-  raises immediately if the model selects a bullet `id` that doesn't exist.
-- Running any stage end to end against real data requires an
-  `ANTHROPIC_API_KEY` (scoring and tailoring) and, for delivery,
-  `GMAIL_APP_PASSWORD` plus the three `GDRIVE_*` OAuth values from
-  `gdrive_authorize.py`. Without those, `python run_all.py --skip-boards
-  --skip-ats` and the renderer/verifier can still be exercised directly
-  against hand-written JSON matching the schema in `jobhunt/tailor/drafter.py`,
-  which is how the renderers were originally built and checked before the
-  drafting call was wired in.
-- There's no CI test job in `daily.yml`, the daily run against real (private)
-  data is the test. That's a fair tradeoff for a single-user tool with a
-  human reading the digest every morning; it would not be a fair tradeoff for
-  anything with more than one user depending on it.
+The suite in `tests/` is offline: no network, no LLM calls, no real database.
+It covers the drafter's response handling and id enforcement, the voice/style
+layer end to end (draft with a stubbed model, render both documents, extract
+the text back out, run the slop detector), the digest-membership diff, the
+tracker's round-trip merge and workbook writing, retention pruning and
+tombstones, and the profile loader. It runs as a step in `daily.yml` before
+the pipeline, so a broken module stops the run instead of producing a bad
+digest. The tests that read the candidate profile run here against the
+fictional `profile/*.example.*` files, which `tests/conftest.py` copies into
+place when no real profile exists.
+
+Beyond the suite, two checks run on every real execution:
+
+- `jobhunt/tailor/verify.py` extracts text back out of every rendered
+  document and fails the job (triggering a retry) if the text is too short,
+  contains mojibake, or is missing a keyword the drafter said it would
+  mirror. Its slop detector also flags banned phrases, em-dash overuse,
+  near-uniform bullet lengths, and a cover letter that repeats the summary.
+- `_validate_no_fabrication()` and `_validate_voice()` in `drafter.py` run on
+  every drafting call and raise if the model selects an `id` that doesn't
+  exist or writes outside its two bounded bridge sentences.
+
+Running any stage end to end against real data needs Claude API credentials
+(see Setup) and, for delivery, `GMAIL_APP_PASSWORD` plus the three `GDRIVE_*`
+OAuth values from `gdrive_authorize.py`.
 
 <p align="right">(<a href="#houndstooth">back to top</a>)</p>
 
@@ -194,17 +242,49 @@ library. What "tested" means in practice:
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-export ANTHROPIC_API_KEY=your-anthropic-api-key
 cp config.example.yaml config.yaml   # then edit: your search terms, ATS targets, email
 cp profile/resume_template.example.json profile/resume_template.json   # then fill in your real facts
 cp profile/resume_profile.example.md profile/resume_profile.md         # then fill in your real facts
+cp profile/projects.example.json profile/projects.json                 # optional: project bank
+cp profile/voice_bank.example.json profile/voice_bank.json             # optional: enables the voice schema
 ```
 
 ```bash
 python run_all.py            # scrape + score + report
 python phase2_tailor.py      # tailor docs for jobs scoring >= config threshold
 python -m jobhunt.deliver    # upload to Drive + email the digest
+python -m jobhunt.tracker    # merge into the Drive tracker workbook
+python -m jobhunt.retention  # prune jobs.db + reports/ to the configured window
 ```
+
+### Claude API credentials
+
+Locally, the usual `export ANTHROPIC_API_KEY=...` works: `jobhunt/llm.py`
+constructs a zero-argument `anthropic.Anthropic()` client, which picks the
+key up from the environment.
+
+In GitHub Actions there is no API key secret at all. The workflow uses
+Workload Identity Federation: the job requests a GitHub OIDC token
+(`permissions: id-token: write`) and the anthropic SDK exchanges it at
+Anthropic for a ~10-minute access token under a federation rule you create in
+the Console (Settings -> Workload identity). The rule is bound to one repo and
+branch, so only a `workflow_dispatch` run of your fork on your main branch can
+authenticate; anything else is rejected at the exchange. Three repository
+*variables* (not secrets, they are identifiers) configure the client:
+
+| Variable | Value |
+|---|---|
+| `ANTHROPIC_FEDERATION_RULE_ID` | `fdrl_...` (the rule above) |
+| `ANTHROPIC_SERVICE_ACCOUNT_ID` | `svac_...` (the service account the rule maps to) |
+| `ANTHROPIC_ORGANIZATION_ID` | your org UUID (Console: Settings -> Organization) |
+
+GitHub OIDC tokens expire about five minutes after issue and each may be
+exchanged once, so `daily.yml` runs a small refresher loop that rewrites
+`ANTHROPIC_IDENTITY_TOKEN_FILE` every 60 seconds for the life of the job; the
+SDK re-reads that file on each exchange. The header comment in
+`.github/workflows/daily.yml` walks through the same setup. The remaining
+secrets (`GMAIL_APP_PASSWORD`, `GDRIVE_CLIENT_ID`, `GDRIVE_CLIENT_SECRET`,
+`GDRIVE_REFRESH_TOKEN`, `GDRIVE_FOLDER_ID`) are ordinary repository secrets.
 
 Delivery needs a one-time Google OAuth setup: create a Google Cloud project,
 enable the Drive API, create a Desktop-app OAuth client, then run
@@ -212,6 +292,32 @@ enable the Drive API, create a Desktop-app OAuth client, then run
 browser for a one-time consent screen and prints the three values
 (`GDRIVE_CLIENT_ID`, `GDRIVE_CLIENT_SECRET`, `GDRIVE_REFRESH_TOKEN`) to set as
 env vars or GitHub Actions secrets.
+
+<p align="right">(<a href="#houndstooth">back to top</a>)</p>
+
+## Keeping this repo in sync with the private one
+
+**Last synced from private: 2026-10-16.**
+
+This repo is a filtered mirror of the private production repo, and
+`scripts/sync_from_private.sh` is how it stays one:
+
+```bash
+scripts/sync_from_private.sh /path/to/private/houndstooth
+```
+
+It copies an explicit allowlist (the `jobhunt/` package, the entry points,
+`requirements.txt`, `tests/`, the workflow), removes anything in those
+directories that no longer exists upstream, re-applies the public-repo
+adaptations (the tests that assert on the real profile are pointed at the
+example one), and then runs `scripts/check_no_personal_data.sh` over the
+whole tree. That gate greps for personal patterns (email addresses, the
+owner's handle, the real Drive folder id read from the private config, real
+employers) and refuses if a database, `reports/`, a real profile file or a
+private doc is tracked. A failing gate exits non-zero so the result cannot be
+committed by accident. README, LICENSE, `config.example.yaml`,
+`profile/*.example.*`, `sample_output/` and `tests/conftest.py` are owned
+here and never overwritten.
 
 <p align="right">(<a href="#houndstooth">back to top</a>)</p>
 

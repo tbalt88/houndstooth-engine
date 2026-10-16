@@ -13,7 +13,7 @@ locations:
   - "Remote"
 
 country_indeed: "USA"
-hours_old: 24           # how far back each run searches (24 = daily cadence)
+hours_old: 24           # how far back each run searches (24 = daily cadence; use 168 for a first-run 7-day backfill)
 results_per_search: 40  # per site per search term
 sites: ["indeed", "google", "zip_recruiter"]   # tier-1 sources with no anti-bot friction
 linkedin_enabled: false  # flip to true + add proxies for tier-3 residual pulls; LinkedIn is aggressive about blocking scrapers
@@ -23,7 +23,7 @@ proxies: []              # e.g. ["user:pass@host:port"] -- only needed if linked
 # ---- Keyword searches ----
 # Each term runs against every site + location combination. Tier is just a
 # label carried through to scoring/reporting -- use it however is useful
-# (e.g. "core title match" vs. "adjacent/stretch").
+# (e.g. tier 1 = current-title matches, tier 2 = domain wedge / stretch).
 searches:
   - term: "solutions engineer healthcare"
     tier: 1
@@ -44,25 +44,39 @@ google_search_suffix: "jobs near Austin, TX since last week"
 # freshest data, no scraping/anti-bot concerns. type: greenhouse | lever |
 # ashby | workday. For workday, slug = tenant subdomain, extra = the site
 # name that appears in the company's careers URL (varies per tenant).
+# Tip: verify a slug live against the ATS API before adding it, and keep a
+# trailing comment per entry saying why it is here -- boards migrate between
+# ATS vendors, and a dead slug silently returns zero jobs.
 ats_targets:
-  - { name: "ExampleCorp",       type: greenhouse, slug: "examplecorp" }
+  - { name: "ExampleCorp",       type: greenhouse, slug: "examplecorp" }    # why this company is on the list
   - { name: "SampleHealth",      type: lever,      slug: "samplehealth" }
   - { name: "DemoTech",          type: ashby,      slug: "demotech" }
   - { name: "AcmeSystems",       type: workday,    slug: "acmesystems", extra: "Acme" }
 
 # Keywords to match against ATS job titles (ATS endpoints return every open
 # role, so this is the only filter on that source -- boards already filter
-# by search term).
+# by search term). Matching is a case-insensitive substring test, so list
+# spelling variants explicitly: "forward-deployed" does not match
+# "forward deployed". Broad words ("deployment", "integration") widen the
+# net at the cost of noise; the LLM scorer is the second gate.
 ats_title_keywords:
   - architect
   - "forward deployed"
+  - "forward-deployed"
   - "solutions engineer"
+  - "solutions architect"
+  - implementation
   - integration
 
 # ---- Hard filters (stage 0, before any LLM spend) ----
 filters:
+  # Title words that drop a posting outright. Keep "sales engineer"-style
+  # titles alive if they are adjacent to what you want; exclude only the
+  # pure-sales and people-management titles you would never apply to.
   exclude_title_keywords: ["intern", "junior", "jr.", "entry level",
-                           "director", "vice president", "vp of", "head of"]
+                           "director", "vice president", "vp of", "head of",
+                           "engineering manager", "people manager",
+                           "sales representative", "sales development", "account executive"]
   min_salary: 0            # set e.g. 150000 to enforce a floor when salary is present
   require_us: true
 
@@ -77,15 +91,32 @@ scoring:
 tailoring:
   model: claude-sonnet-5        # final-output-quality work, not bulk triage -- use the strong model here
   min_score: 75                 # only tailor jobs scoring >= this
+  max_jobs_per_run: 8           # cost/time guard: top-N by score per run, so a re-score backlog
+                                # cannot blow the CI timeout in one batch
   max_retries: 2                # revision attempts if verification fails, before flagging for manual review
   format: docx                  # docx (editable, default) | pdf (reportlab, no external binary needed)
 
-# ---- Delivery: Google Drive upload + email digest ----
+# ---- Delivery: Google Drive upload + email digest + tracker workbook ----
 # Secrets come from env vars, NOT this file:
 #   GDRIVE_CLIENT_ID / GDRIVE_CLIENT_SECRET / GDRIVE_REFRESH_TOKEN  (run gdrive_authorize.py once)
 #   GMAIL_APP_PASSWORD           (Google app password for SMTP)
 delivery:
-  gdrive_folder_id: "REPLACE_WITH_YOUR_DRIVE_FOLDER_ID"   # any folder you own -- no sharing step needed (OAuth, not a service account)
+  gdrive_folder_id: "REPLACE_WITH_YOUR_DRIVE_FOLDER_ID"   # any folder you own -- no sharing step needed (OAuth, not a service account); GDRIVE_FOLDER_ID env var overrides
   email_from: "you@example.com"
   email_to: "you@example.com"
   min_score: 70                 # digest includes jobs scoring >= this
+  summary_min_score: 78         # "Top matches" digest section + tracker green-fill threshold
+  tracker_file: "Houndstooth Job Tracker.xlsx"   # persistent tracker workbook in the Drive folder (jobhunt/tracker.py);
+                                                 # your Status/Notes edits in it are read back and merged each run
+
+# ---- Retention: keep jobs.db + reports/ bounded ----
+# jobs.db grows with every run (the private production repo commits it to git
+# daily, so it was heading for GitHub's 100 MiB file block). Rows older than
+# `days` are deleted unless acted on (tailored, delivered, or given a tracker
+# status); deleted ids are tombstoned for `tombstone_days` so a still-live
+# posting is not re-scored as "new"; reports/ files older than `days` go too,
+# and the database is VACUUMed afterwards. Set enabled: false to keep everything.
+retention:
+  enabled: true
+  days: 30
+  tombstone_days: 180
