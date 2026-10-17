@@ -73,8 +73,30 @@ def upload_job_docs(service, folder_id: str, job_row) -> dict:
 
 # ---------------- Digest email ----------------
 
-def _digest_html(top_rows, tailored_links: dict, min_score: int) -> str:
+def _job_line(r) -> str:
+    """One score-prefixed line: `score — <a href="url">Title</a> @ Company (Location)`."""
+    return (f'{r["score"]} &mdash; <a href="{r["url"]}">{r["title"]}</a> '
+            f'@ {r["company"]} ({r["location"] or ""})')
+
+
+def _digest_html(top_rows, tailored_links: dict, min_score: int, new_rows=None, summary_min_score=78) -> str:
     stamp = date.today().isoformat()
+    new_rows = new_rows or []
+    top_matches = [r for r in top_rows if r["score"] >= summary_min_score]
+
+    if new_rows:
+        new_since_html = "<ul>" + "".join(f"<li>{_job_line(r)}</li>" for r in new_rows) + "</ul>"
+    else:
+        new_since_html = "<p>No new jobs since yesterday.</p>"
+    top_matches_html = "<ul>" + "".join(f"<li>{_job_line(r)}</li>" for r in top_matches) + "</ul>"
+
+    sections_html = f"""
+    <h3>New since yesterday</h3>
+    {new_since_html}
+    <h3>Top matches (score &ge; {summary_min_score})</h3>
+    {top_matches_html}
+    """
+
     rows_html = []
     for r in top_rows:
         links = tailored_links.get(r["id"], {})
@@ -98,6 +120,7 @@ def _digest_html(top_rows, tailored_links: dict, min_score: int) -> str:
     return f"""<html><body style="font-family:Helvetica,Arial,sans-serif;color:#222">
     <h2>Houndstooth digest &mdash; {stamp}</h2>
     <p>{len(top_rows)} jobs scoring &ge;{min_score}. Tailored docs (score &ge; tailoring threshold) link to Google Drive.</p>
+    {sections_html}
     <table style="border-collapse:collapse;font-size:14px" border="1" bordercolor="#ddd">
       <tr style="background:#f2f2f2">
         <th style="padding:6px 10px">Score</th><th style="padding:6px 10px">Title</th>
@@ -123,6 +146,31 @@ def send_email(html: str, cfg: dict) -> None:
         smtp.sendmail(cfg["email_from"], [cfg["email_to"]], msg.as_string())
 
 
+def fetch_top_rows(con, min_score: int):
+    """The digest row set: score >= min_score, minus tracker-suppressed statuses
+    (db.SUPPRESSED_STATUSES). Suppressed jobs stay in jobs.db and the tracker but
+    leave the email, its sections, and digest_log recording."""
+    return con.execute(
+        f"SELECT * FROM jobs WHERE score >= ? AND {db.not_suppressed_sql()} "
+        "ORDER BY score DESC, date_posted DESC",
+        (min_score, *db.SUPPRESSED_STATUSES),
+    ).fetchall()
+
+
+def compute_new_rows(con, top_rows, today: str):
+    """New-since-yesterday diff: rows in top_rows whose id wasn't in the most recent prior
+    digest_date's membership. No prior date at all -> empty (nothing to diff against)."""
+    prev = con.execute(
+        "SELECT MAX(digest_date) AS d FROM digest_log WHERE digest_date < ?", (today,)
+    ).fetchone()["d"]
+    if prev is None:
+        return []
+    prev_ids = {r["job_id"] for r in con.execute(
+        "SELECT job_id FROM digest_log WHERE digest_date = ?", (prev,)
+    ).fetchall()}
+    return [r for r in top_rows if r["id"] not in prev_ids]
+
+
 # ---------------- Orchestration ----------------
 
 def run(config_path="config.yaml"):
@@ -131,6 +179,7 @@ def run(config_path="config.yaml"):
     if not folder_id:
         raise RuntimeError("set delivery.gdrive_folder_id in config.yaml or GDRIVE_FOLDER_ID env var")
     min_score = cfg.get("min_score", 70)
+    summary_min_score = cfg.get("summary_min_score", 78)
 
     con = db.connect()
 
@@ -155,13 +204,23 @@ def run(config_path="config.yaml"):
     print(f"[deliver] {len(tailored_links)}/{len(pending)} doc pairs uploaded")
 
     # 2. Digest email covering all current top fits (links included where they exist)
-    top_rows = con.execute(
-        "SELECT * FROM jobs WHERE score >= ? ORDER BY score DESC, date_posted DESC", (min_score,)
-    ).fetchall()
+    top_rows = fetch_top_rows(con, min_score)
     if not top_rows:
         print("[deliver] no top fits to email; skipping digest")
         return
-    send_email(_digest_html(top_rows, tailored_links, min_score), cfg)
+
+    # 3. Diff against the most recent prior digest date
+    today = date.today().isoformat()
+    new_rows = compute_new_rows(con, top_rows, today)
+
+    html = _digest_html(top_rows, tailored_links, min_score, new_rows, summary_min_score)
+    send_email(html, cfg)
+
+    # 4. Record today's digest membership only after a successful send
+    for r in top_rows:
+        con.execute("INSERT OR IGNORE INTO digest_log (job_id, digest_date) VALUES (?, ?)",
+                    (r["id"], today))
+    con.commit()
     print(f"[deliver] digest emailed to {cfg['email_to']} ({len(top_rows)} jobs)")
 
 

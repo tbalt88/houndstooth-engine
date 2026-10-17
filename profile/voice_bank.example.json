@@ -1,0 +1,31 @@
+{
+  "_note": "EXAMPLE FILE -- fictional voice bank for 'Jordan Doe'. Copy to voice_bank.json and write every entry in your own words; the generator selects entries by id and never rewrites them. Fields: labels (one-line headline under the name), summaries (60-90 words, first person; 'audience' tags choose which fit a posting), positions (one-sentence opinions; one is printed under the summary), anecdotes (60-120 words, real stories with a number and a lesson; cover letters pick two), openers/closers (cover-letter first and last lines; {company} and {role} are filled in). Keep ids stable. Avoid the phrases listed in BANNED_PHRASES in jobhunt/tailor/verify.py.",
+  "labels": [
+    { "id": "L1", "audience": ["solutions-engineer", "implementation-architect", "generalist"], "text": "Platform engineer for payments and compliance systems" },
+    { "id": "L2", "audience": ["ai-platform-governance", "fde-health-ai"], "text": "Backend engineer who puts the guardrail in code, not the prompt" },
+    { "id": "L3", "audience": ["payer-platform"], "text": "Integration engineer learning the claims and eligibility stack" }
+  ],
+  "summaries": [
+    { "id": "S1", "audience": ["solutions-engineer", "implementation-architect", "generalist"], "text": "I build and run the back-end systems that move money and prove it moved correctly. Eight years in regulated fintech taught me to design for the auditor as well as the user: every service I own has a replayable log, a reconciliation path and a runbook someone else has used. I like client-facing work when it ends in a working integration rather than a slide." },
+    { "id": "S2", "audience": ["ai-platform-governance", "fde-health-ai"], "text": "My recent work is on the boundary between language models and controlled systems. I have shipped a review gate that rejects generated change descriptions when the claimed controls do not hold, and I keep the enforcement in code where a prompt cannot talk it away. I want roles where that habit matters more than demo polish." },
+    { "id": "S3", "audience": ["payer-platform"], "text": "I come to healthcare payments from fintech payments, where I ran reconciliation for two million daily transactions. Claims, eligibility and remittance are new vocabulary for a familiar problem: many parties, strict formats, and money that has to balance at the end of the day. I learn domains by parsing their files first." }
+  ],
+  "positions": [
+    { "id": "P1", "themes": ["governance", "testing"], "text": "A safety rule that lives only in a prompt is a suggestion; one that lives in a validator is a rule." },
+    { "id": "P2", "themes": ["reliability", "delivery"], "text": "Recovery time is the metric that tells you whether an architecture is honest about failure." },
+    { "id": "P3", "themes": ["compliance", "automation"], "text": "Audit evidence should be a by-product of the pipeline, never a project of its own." }
+  ],
+  "anecdotes": [
+    { "id": "A1", "themes": ["payments", "reliability", "incident"], "text": "In 2022 our billing monolith dropped a night of invoices after a schema change, and recovery took six hours of hand-written SQL. I proposed the move to event-driven services on Kafka and ran the migration over nine months with no customer-visible outage. The next comparable fault, a year later, was replayed from the log in eleven minutes. The lesson I kept was that the replay path has to be exercised on ordinary days, so I made it part of every release." },
+    { "id": "A2", "themes": ["compliance", "automation", "audit"], "text": "Our first SOC 2 audit cost the team two weeks of screenshots. Before the second one I wrote a nightly job that pulls deploy records, access reviews and ticket links into a signed evidence bundle, about 400 lines of Python and a cron entry. The second audit took the auditors three days and raised two findings, both real and both fixed within the week. What I learned is that auditors are easier to work with when the evidence arrives in their format, not ours." },
+    { "id": "A3", "themes": ["llm", "governance", "testing"], "text": "When we let a model draft change descriptions for our release notes, one in nine claimed a control that the diff did not implement. Rather than tune the prompt, I built a gate that parses each claim and checks it against the control registry, rejecting the description when the evidence is missing. Reviewers confirmed every rejection in the first quarter. The habit I took from it is to treat model output as untrusted input and put the check where it cannot be skipped." }
+  ],
+  "openers": [
+    { "id": "O1", "text": "I am applying for the {role} position at {company} because the work described is the work I already do." },
+    { "id": "O2", "text": "Two stories explain why the {role} role at {company} fits, better than a list of skills would." }
+  ],
+  "closers": [
+    { "id": "C1", "text": "If that is useful to {company}, I would welcome a conversation about the {role} role." },
+    { "id": "C2", "text": "Thank you for reading; I am glad to walk through any of this with the {company} team." }
+  ]
+}

@@ -1,11 +1,12 @@
 {
-  "_comment": "EXAMPLE FILE -- fictional candidate 'Jordan Doe'. This shows the shape of resume_template.json: a bank of tagged, id'd bullets that the tailoring drafter (jobhunt/tailor/drafter.py) may SELECT FROM but never invent beyond. That constraint -- select an existing id, never write new bullet text -- is the anti-fabrication guardrail, and it's enforced in code (see _validate_no_fabrication in drafter.py), not just requested in the prompt. Copy this to resume_template.json and replace every field with your own real, factual experience.",
+  "_comment": "EXAMPLE FILE -- fictional candidate 'Jordan Doe'. This shows the shape of resume_template.json: a bank of tagged, id'd bullets that the tailoring drafter (jobhunt/tailor/drafter.py) may SELECT FROM but never invent beyond. That constraint -- select an existing id, never write new bullet text -- is the anti-fabrication guardrail, and it's enforced in code (see _validate_no_fabrication in drafter.py), not just requested in the prompt. Copy this to resume_template.json and replace every field with your own real, factual experience. Projects live in projects.json and the cover-letter voice in voice_bank.json (see the .example files beside this one); jobhunt/profile_load.py merges the three.",
   "contact": {
     "name": "Jordan Doe",
     "location": "Austin, TX (Remote/Hybrid)",
     "email": "jordan.doe@example.com",
     "phone": "555-010-0100",
-    "linkedin": "https://linkedin.com/in/jordandoe-example"
+    "linkedin": "https://linkedin.com/in/jordandoe-example",
+    "github": "https://github.com/jordandoe-example"
   },
   "summary_variants": [
     "Platform engineer with 8+ years building integration and automation systems for regulated fintech products, now applying that same delivery discipline to AI-assisted engineering workflows.",
@@ -17,6 +18,7 @@
       "title": "Senior Platform Engineer",
       "start": "2021-03",
       "end": "Present",
+      "context": "Payments platform team, 12 engineers, serving 300 business customers.",
       "bullets": [
         {
           "id": "b1",
@@ -25,8 +27,13 @@
         },
         {
           "id": "b2",
-          "text": "Led the migration of a monolithic billing system to event-driven microservices, reducing incident recovery time from hours to minutes.",
-          "tags": ["architecture", "microservices", "reliability"]
+          "text": "Led the migration of a monolithic billing system to event-driven microservices on Kafka, reducing incident recovery time from hours to minutes.",
+          "tags": ["architecture", "microservices", "reliability", "kafka"]
+        },
+        {
+          "id": "b3",
+          "text": "Wrote the SOC 2 control evidence automation that pulls deploy and access logs nightly, replacing a two-week manual audit scramble.",
+          "tags": ["compliance", "automation", "soc2"]
         }
       ]
     },
@@ -35,16 +42,30 @@
       "title": "Software Engineer",
       "start": "2017-06",
       "end": "2021-02",
+      "context": "Compliance-reporting product for mid-market lenders.",
       "bullets": [
         {
-          "id": "b3",
+          "id": "b4",
           "text": "Built REST APIs and internal tooling for a compliance-reporting platform used by 40+ internal analysts.",
           "tags": ["backend", "api-design", "compliance"]
         },
         {
-          "id": "b4",
+          "id": "b5",
           "text": "Introduced automated integration testing for the core transaction pipeline, reducing production defects by 35%.",
           "tags": ["testing", "quality", "ci-cd"]
+        }
+      ]
+    },
+    {
+      "company": "Placeholder Consulting LLC",
+      "title": "Junior Developer",
+      "start": "2015-01",
+      "end": "2017-05",
+      "bullets": [
+        {
+          "id": "b6",
+          "text": "Shipped PostgreSQL reporting views and nightly ETL jobs for three small-business clients.",
+          "tags": ["sql", "etl", "consulting"]
         }
       ]
     }
@@ -58,8 +79,15 @@
     "CI/CD (GitHub Actions)",
     "Compliance-aware system design (SOC 2, PCI-adjacent)"
   ],
+  "skill_groups": [
+    { "name": "Integration and Cloud", "items": ["Kafka", "REST API design", "event-driven architecture", "AWS", "Terraform"] },
+    { "name": "Languages and Data", "items": ["Python", "Go", "SQL", "PostgreSQL", "pandas"] },
+    { "name": "Compliance and Delivery", "items": ["SOC 2", "PCI-adjacent controls", "CI/CD (GitHub Actions)", "incident response"] }
+  ],
   "education": [
     { "degree": "BS Computer Science", "school": "Example State University", "year": "2017" }
   ],
-  "certifications": []
+  "certifications": [
+    { "name": "AWS Solutions Architect Associate", "issuer": "Amazon Web Services", "year": "2022" }
+  ]
 }

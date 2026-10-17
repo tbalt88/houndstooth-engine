@@ -1,0 +1,40 @@
+{
+  "_note": "EXAMPLE FILE -- fictional project bank for 'Jordan Doe'. Copy to projects.json and replace with your own. 'rank' is the default order; 'audience' tags (see AUDIENCES in jobhunt/tailor/style.py) choose which projects a posting gets; 'context' prints under the project name; every bullet needs a stable id that does not collide with resume_template.json. Keep each figure traceable to something you can show.",
+  "projects": [
+    {
+      "name": "Ledger Replay",
+      "rank": 1,
+      "audience": ["solutions-engineer", "ai-platform-governance", "generalist"],
+      "descriptor": "open source, Python",
+      "url": "https://github.com/jordandoe-example/ledger-replay",
+      "context": "Replays production payment events against a candidate build and diffs the ledgers.",
+      "bullets": [
+        { "id": "p1", "text": "Caught 14 rounding regressions before release across two years of use, each one a would-be customer refund.", "tags": ["testing", "payments", "python"] },
+        { "id": "p2", "text": "Runs the full 90-day event history in under 20 minutes on a laptop by streaming from compressed Kafka snapshots.", "tags": ["kafka", "performance"] }
+      ]
+    },
+    {
+      "name": "Policy Gate",
+      "rank": 2,
+      "audience": ["ai-platform-governance", "fde-health-ai"],
+      "descriptor": "internal tool",
+      "url": "",
+      "context": "A review gate that checks LLM-generated change descriptions against the controls they claim to satisfy.",
+      "bullets": [
+        { "id": "p3", "text": "Rejected 1 in 9 generated descriptions in the first quarter, every rejection confirmed by a human reviewer.", "tags": ["llm", "governance", "compliance"] },
+        { "id": "p4", "text": "Logs every decision with the model, prompt hash and reviewer, so an auditor can replay any approval.", "tags": ["audit", "llm"] }
+      ]
+    },
+    {
+      "name": "Claims Intake Sandbox",
+      "rank": 3,
+      "audience": ["payer-platform", "solutions-engineer"],
+      "descriptor": "weekend project",
+      "url": "https://github.com/jordandoe-example/claims-sandbox",
+      "context": "A toy X12 837 parser and eligibility stub used to learn healthcare claims formats.",
+      "bullets": [
+        { "id": "p5", "text": "Parses the 837P and 270/271 transaction sets into plain JSON with 200 fixture files and a property-based test suite.", "tags": ["healthcare", "parsing", "testing"] }
+      ]
+    }
+  ]
+}

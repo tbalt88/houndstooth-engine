@@ -13,8 +13,8 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from jobhunt import db
-from jobhunt.tailor import drafter, verify
+from jobhunt import db, profile_load
+from jobhunt.tailor import drafter, style as style_mod, verify
 from jobhunt.tailor.renderers import get_renderer
 
 ROOT = Path(__file__).resolve().parent
@@ -40,9 +40,17 @@ def _select_rows(con, args, cfg):
         rows = con.execute("SELECT * FROM jobs WHERE id=?", (args.job_id,)).fetchall()
     else:
         min_score = args.min_score if args.min_score is not None else cfg.get("min_score", 75)
-        clause = "score >= ?" if args.force else "score >= ? AND tailored_at IS NULL"
+        # Suppressed statuses (tracker Dismissed/Rejected) are skipped in the automatic
+        # selection; --force and --job-id remain manual overrides that ignore them.
+        clause = ("score >= ?" if args.force
+                  else f"score >= ? AND tailored_at IS NULL AND {db.not_suppressed_sql()}")
+        params = (min_score,) if args.force else (min_score, *db.SUPPRESSED_STATUSES)
+        # Cost/time guard (like scoring.max_jobs_per_run): highest scores first, the
+        # rest drain across subsequent runs. --force/--job-id remain uncapped.
+        limit = cfg.get("max_jobs_per_run", 8)
         rows = con.execute(
-            f"SELECT * FROM jobs WHERE {clause} ORDER BY score DESC", (min_score,)
+            f"SELECT * FROM jobs WHERE {clause} ORDER BY score DESC LIMIT ?",
+            (*params, limit),
         ).fetchall()
     return rows
 
@@ -58,23 +66,28 @@ def tailor_one(facts, job, model, out_dir, render_only, max_retries, renderer):
         result = _render_and_verify(facts, job, draft_json, out_dir, renderer)
         return draft_json, result
 
+    style = style_mod.choose(job, facts)
     revision_issues = None
     for attempt in range(max_retries + 1):
-        draft_json = drafter.draft(facts, job, model=model, revision_issues=revision_issues)
+        draft_json = drafter.draft(facts, job, model=model, revision_issues=revision_issues, style=style)
         draft_path.write_text(json.dumps(draft_json, indent=2))
         result = _render_and_verify(facts, job, draft_json, out_dir, renderer)
         if result["pass"]:
             return draft_json, result
-        revision_issues = result["resume"]["reasons"] + result["cover_letter"]["reasons"]
+        revision_issues = (result["resume"]["reasons"] + result["cover_letter"]["reasons"]
+                           + result.get("slop", []))
 
     return draft_json, result  # exhausted retries -- caller flags for manual review
 
 
 def _render_and_verify(facts, job, draft_json, out_dir, renderer):
-    resume_path = renderer.render_resume(facts, draft_json, out_dir / f"resume{renderer.EXT}")
-    cover_path = renderer.render_cover_letter(facts, draft_json, job, out_dir / f"cover_letter{renderer.EXT}")
+    style = draft_json.get("style")
+    resume_path = renderer.render_resume(facts, draft_json, out_dir / f"resume{renderer.EXT}", style=style)
+    cover_path = renderer.render_cover_letter(facts, draft_json, job, out_dir / f"cover_letter{renderer.EXT}", style=style)
     keywords = draft_json["resume"].get("keywords_mirrored", [])
-    result = verify.verify_job(resume_path, cover_path, keywords)
+    paragraphs = getattr(renderer, "cover_letter_paragraphs", lambda f, d, j: d["cover_letter"].get("body_paragraphs", []))(facts, draft_json, job)
+    result = verify.verify_job(resume_path, cover_path, keywords, draft=draft_json, facts=facts,
+                               cover_paragraphs=paragraphs)
     verify.write_verification(result, out_dir / "verification.json")
     return result
 
@@ -86,7 +99,7 @@ def run(min_score=None, job_id=None, render_only=False, force=False, config_path
     max_retries = cfg.get("max_retries", 2)
     renderer = get_renderer(cfg.get("format", "docx"))
 
-    facts = json.loads(FACTS_PATH.read_text())
+    facts = profile_load.load_facts()
     con = db.connect()
 
     args = argparse.Namespace(min_score=min_score, job_id=job_id, force=force)
@@ -100,14 +113,14 @@ def run(min_score=None, job_id=None, render_only=False, force=False, config_path
         try:
             _, result = tailor_one(facts, job, model, out_dir, render_only, max_retries, renderer)
         except Exception as e:
-            print(f"  !! tailoring failed for {job['id']}: {e}")
+            print(f"  !! tailoring failed for {job['id']}: {type(e).__name__}: {e}")
             continue
 
         status = "pass" if result["pass"] else "needs_manual_review"
         rel_dir = out_dir.relative_to(ROOT)
         con.execute(
             """UPDATE jobs SET tailored_at=?, tailored_resume_path=?, tailored_cover_path=?,
-               verification_status=? WHERE id=?""",
+               verification_status=?, delivered_at=NULL, drive_links=NULL WHERE id=?""",
             (datetime.now().isoformat(), str(rel_dir / f"resume{renderer.EXT}"),
              str(rel_dir / f"cover_letter{renderer.EXT}"), status, job["id"]),
         )

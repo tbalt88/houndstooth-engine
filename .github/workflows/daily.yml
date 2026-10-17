@@ -1,7 +1,18 @@
 # Houndstooth daily run: scrape -> score -> tailor -> deliver -> persist state.
 #
+# Claude API auth: Workload Identity Federation -- no ANTHROPIC_API_KEY secret. The job
+# requests a GitHub OIDC token (id-token: write) and the anthropic SDK exchanges it at
+# Anthropic for a ~10-minute access token under federation rule fdrl_* (Console:
+# Settings -> Workload identity). Only a workflow_dispatch run of tbalt88/houndstooth
+# on refs/heads/main can authenticate; anything else is rejected at the exchange.
+#
+# Required repo variables (Settings -> Secrets and variables -> Actions -> Variables;
+# these are identifiers, not secrets):
+#   ANTHROPIC_FEDERATION_RULE_ID    fdrl_...  (the rule above)
+#   ANTHROPIC_SERVICE_ACCOUNT_ID    svac_...  (houndstooth-daily)
+#   ANTHROPIC_ORGANIZATION_ID       org UUID  (Console: Settings -> Organization)
+#
 # Required repo secrets:
-#   ANTHROPIC_API_KEY     Claude API key (scoring + drafting)
 #   GMAIL_APP_PASSWORD    Google app password for SMTP digest email
 #   GDRIVE_CLIENT_ID      OAuth client id (run gdrive_authorize.py once to obtain)
 #   GDRIVE_CLIENT_SECRET  OAuth client secret (same one-time run)
@@ -14,13 +25,15 @@ on:
   # workflow_dispatch REST API daily at 11:38 UTC (4:38 AM PDT). GitHub's own
   # cron proved unreliable for this repo -- observed a 149-min delay and two
   # outright dropped runs (Jul 9-10 2026) -- so we don't depend on it.
-  workflow_dispatch: {}   # invoked by the external scheduler + manual "Run workflow"
-  # BACKSTOP only: GitHub's best-effort cron. Random odd minute (:38) to dodge
-  # the congested :00/:15/:30/:45 slots. Remove this block once the external
-  # trigger is confirmed working, to avoid duplicate daily runs / digest emails.
-  # DST-naive (fixed UTC): 11:38 UTC = 4:38 AM PDT now, 3:38 AM in winter (PST).
-  schedule:
-    - cron: "38 11 * * *"
+  workflow_dispatch:      # invoked by the external scheduler + manual "Run workflow"
+    inputs:
+      job_id:
+        description: "Re-tailor ONE job by jobs.db id (skips scrape/score; --force). Leave blank for the normal daily run."
+        required: false
+        default: ""
+  # The GitHub-cron backstop was removed 2026-08-08: with the external trigger
+  # proven reliable, both were firing at 11:38 UTC and producing duplicate daily
+  # runs + double digests (observed Aug 3-8).
 
 # never let two runs race on committing jobs.db
 concurrency:
@@ -29,11 +42,21 @@ concurrency:
 
 permissions:
   contents: write
+  id-token: write   # lets the job mint a GitHub OIDC token for the Claude API exchange
 
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90   # scrape ~30m + capped tailoring (~12m) + deliver/tracker; was 45, hit by the post-re-score tailoring backlog 2026-08-08
+    env:
+      # Read by the zero-arg anthropic.Anthropic() client (jobhunt/llm.py). No
+      # ANTHROPIC_WORKSPACE_ID: the rule is bound to the single Default workspace.
+      ANTHROPIC_FEDERATION_RULE_ID: ${{ vars.ANTHROPIC_FEDERATION_RULE_ID }}
+      ANTHROPIC_ORGANIZATION_ID: ${{ vars.ANTHROPIC_ORGANIZATION_ID }}
+      ANTHROPIC_SERVICE_ACCOUNT_ID: ${{ vars.ANTHROPIC_SERVICE_ACCOUNT_ID }}
+      # ANTHROPIC_IDENTITY_TOKEN_FILE is exported to $GITHUB_ENV by the refresher step
+      # below: the `runner` context is not available in job-level env, and a job-level
+      # `${{ runner.temp }}` makes GitHub reject the whole workflow file.
     steps:
       - uses: actions/checkout@v5
 
@@ -45,15 +68,50 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Start GitHub OIDC token refresher (Claude API federation)
+        # GitHub OIDC tokens expire ~5 min after issue and each may be exchanged once.
+        # The SDK re-reads ANTHROPIC_IDENTITY_TOKEN_FILE on every exchange (first call,
+        # then ~2 min before each access-token expiry), so keep a fresh, unused token in
+        # the file for the whole job: refresh every 60 s in a detached loop. Written via
+        # tmp + mv so a reader never sees a half-written file.
+        run: |
+          ANTHROPIC_IDENTITY_TOKEN_FILE="$RUNNER_TEMP/gha-oidc.jwt"
+          export ANTHROPIC_IDENTITY_TOKEN_FILE
+          echo "ANTHROPIC_IDENTITY_TOKEN_FILE=$ANTHROPIC_IDENTITY_TOKEN_FILE" >> "$GITHUB_ENV"
+          cat > "$RUNNER_TEMP/refresh-oidc.sh" <<'EOF'
+          #!/usr/bin/env bash
+          set -uo pipefail
+          while true; do
+            if curl -sS --fail -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+                 "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://api.anthropic.com" \
+                 | jq -er .value > "$ANTHROPIC_IDENTITY_TOKEN_FILE.tmp"; then
+              mv -f "$ANTHROPIC_IDENTITY_TOKEN_FILE.tmp" "$ANTHROPIC_IDENTITY_TOKEN_FILE"
+            else
+              echo "$(date -u +%FT%TZ) OIDC token fetch failed; keeping previous token" >&2
+            fi
+            sleep 60
+          done
+          EOF
+          chmod +x "$RUNNER_TEMP/refresh-oidc.sh"
+          nohup "$RUNNER_TEMP/refresh-oidc.sh" > "$RUNNER_TEMP/refresh-oidc.log" 2>&1 &
+          for _ in $(seq 1 30); do [ -s "$ANTHROPIC_IDENTITY_TOKEN_FILE" ] && break; sleep 1; done
+          test -s "$ANTHROPIC_IDENTITY_TOKEN_FILE" || { cat "$RUNNER_TEMP/refresh-oidc.log"; exit 1; }
+          echo "OIDC token file ready"
+
+      - name: Tests
+        run: pip install -q pytest && python -m pytest -q tests
+
       - name: Phase 1 — scrape + score + report
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        if: ${{ github.event.inputs.job_id == '' }}
         run: python run_all.py
 
       - name: Phase 2 — tailor top fits
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        if: ${{ github.event.inputs.job_id == '' }}
         run: python phase2_tailor.py
+
+      - name: Phase 2 (single job) — re-tailor one job by id
+        if: ${{ github.event.inputs.job_id != '' }}
+        run: python phase2_tailor.py --job-id "${{ github.event.inputs.job_id }}" --force
 
       - name: Deliver — Drive upload + email digest
         env:
@@ -64,11 +122,28 @@ jobs:
           GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
         run: python -m jobhunt.deliver
 
-      - name: Persist state (jobs.db + reports)
+      # continue-on-error: a transient Drive failure must not skip the Persist step and
+      # lose the day's digest_log (the tracker self-heals next run; digest_log doesn't).
+      - name: Tracker — refresh Houndstooth Job Tracker.xlsx in Drive
+        continue-on-error: true
+        env:
+          GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
+          GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
+          GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+        run: python -m jobhunt.tracker
+
+      # Retention (config.yaml -> retention): 30-day window on jobs rows (acted-on rows
+      # exempt), digest_log and reports/; tombstones keep dedupe honest; VACUUM shrinks the
+      # file. Without this jobs.db grows ~0.8 MiB/day toward GitHub's 100 MiB push block.
+      - name: Retention — prune jobs.db + reports/ to the configured window
+        run: python -m jobhunt.retention
+
+      - name: Persist state (jobs.db + reports + profile)
         run: |
           git config user.name "houndstooth-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add jobs.db reports/
+          git add jobs.db reports/ profile/
           if git diff --cached --quiet; then
             echo "no state changes to commit"
           else
@@ -76,3 +151,23 @@ jobs:
             git pull --rebase origin ${GITHUB_REF_NAME}
             git push origin ${GITHUB_REF_NAME}
           fi
+
+      # Failure alert: reuse the digest's Gmail SMTP path so a red run is an email, not a
+      # missing digest someone has to notice (cron-job.org only sees the dispatch 204).
+      - name: Alert on failure
+        if: failure()
+        env:
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os, smtplib, ssl, yaml
+          from email.message import EmailMessage
+          cfg = yaml.safe_load(open("config.yaml"))["delivery"]
+          m = EmailMessage()
+          m["Subject"] = "houndstooth daily-pipeline FAILED"
+          m["From"], m["To"] = cfg["email_from"], cfg["email_to"]
+          m.set_content("Run: %s/%s/actions/runs/%s" % (
+              os.environ["GITHUB_SERVER_URL"], os.environ["GITHUB_REPOSITORY"], os.environ["GITHUB_RUN_ID"]))
+          with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ssl.create_default_context()) as s:
+              s.login(cfg["email_from"], os.environ["GMAIL_APP_PASSWORD"]); s.send_message(m)
+          PY

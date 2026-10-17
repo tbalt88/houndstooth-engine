@@ -51,7 +51,13 @@ def _bullets_by_id(facts: dict) -> dict:
     return m
 
 
-def render_resume(facts: dict, draft: dict, out_path: Path) -> Path:
+def render_resume(facts: dict, draft: dict, out_path: Path, style: dict | None = None):
+    if draft.get('schema') == 'voice' or 'summary_id' in draft.get('resume', {}):
+        raise NotImplementedError('pdf renderer does not support the voice schema yet; use format: docx')
+    return _render_resume(facts, draft, out_path)
+
+
+def _render_resume(facts: dict, draft: dict, out_path: Path) -> Path:
     """facts: resume_template.json content. draft: §5.2 drafter output ('resume' key)."""
     resume = draft["resume"]
     bullets = _bullets_by_id(facts)
@@ -118,7 +124,7 @@ def render_resume(facts: dict, draft: dict, out_path: Path) -> Path:
     return out_path
 
 
-def render_cover_letter(facts: dict, draft: dict, job: dict, out_path: Path) -> Path:
+def render_cover_letter(facts: dict, draft: dict, job: dict, out_path: Path, style: dict | None = None) -> Path:
     """job: dict with at least 'title' and 'company' for the header/salutation."""
     contact = facts["contact"]
     paragraphs = draft["cover_letter"]["body_paragraphs"]
